@@ -1,0 +1,229 @@
+import os
+import subprocess
+
+import csv
+import argparse
+from utils import get_env, set_env
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--nproc_per_node", default=8, type=int)
+parser.add_argument("--algo", default="scale", type=str, choices=["all", "scale", "zb1", "zb2", "wei","taw", "ds", "1f1b", "ddp", "show", "base", "fsdp"])
+parser.add_argument("--nnodes", default=1, type=int)
+parser.add_argument("--node_rank", default=0, type=int)
+parser.add_argument("--master_addr", default="localhost", type=str)
+
+set_env ("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+set_env ("CUDA_DEVICE_MAX_CONNECTIONS", 1)
+set_env("NCCL_IB_DISABLE",1)
+set_env("NCCL_IB_HCA",0)
+set_env("NCCL_NET_GDR_LEVEL","PHB")
+set_env("NCCL_SOCKET_IFNAME","enp210s0f0") 
+set_env("GLOO_SOCKET_IFNAME","enp210s0f0")
+
+args = parser.parse_args()
+master_addr = args.master_addr
+master_port = "6001"
+
+# launch args
+set_env ("MASTER_ADDR", master_addr)
+set_env ("MASTER_PORT", master_port)
+set_env ("CODE_DIR", "/root/tawpipe")
+
+def init_env(nproc_per_node, nnodes):
+    set_env ("PIPELINE_SIZE", nproc_per_node*nnodes)
+    # ngpu_per_node = ngpu // nnode
+    set_env ("GPUS_PER_NODE", nproc_per_node)
+    
+    set_env(
+        "GLOBAL_BATCH_SIZE",
+        get_env("MICRO_BATCH_SIZE") * get_env("ACC_STEP") * nproc_per_node*nnodes,
+    )
+    set_env ("WORLD_SIZE", nnodes)
+    
+shard_num= args.nnodes if args.nnodes > 1 else 2
+set_env("SHARD_NUM",shard_num)
+# model args
+set_env("HIDDEN_SIZE", 1024) 
+set_env("ATTENTION_HEADS", 32)
+set_env("SEQ_LEN", 16384)#2048
+
+
+# training args
+set_env("MICRO_BATCH_SIZE", 1)
+set_env("ACC_STEP", 64)#16
+
+set_env("CHECKPOINTING", 1)
+set_env("TRAIN_EMBEDDING", 1)
+set_env("EXIT_INTERVAL", 2)
+
+set_env("PROF", 0)
+
+
+def run_base():
+    set_env("LAYERS", args.nproc_per_node*args.nnodes)
+    for seq in [4096, 8192, 16384]:
+        for acc_step in [2, 4]:
+            for micro_batch_size in [2,4]:
+                set_env("MICRO_BATCH_SIZE", micro_batch_size)
+                set_env("ACC_STEP", acc_step)
+                set_env("SEQ_LEN", seq)
+                run_all(args.nproc_per_node, args.nnodes)
+
+        
+
+def run_single(algo, nproc_per_node, nnodes):
+    set_env("ALGO", algo)    
+    ngpu = nproc_per_node * nnodes
+    init_env(nproc_per_node, nnodes)
+    node_rank=args.node_rank
+    print(f"--node-rank {node_rank} ")
+     
+    if os.environ["ALGO"] == "zb1":
+        set_env("ENABLE_ZERO_BUBBLE", 1)
+        set_env("ZERO_BUBBLE_MEM_LIMIT", ngpu)
+        set_env("NODE_RANK", node_rank)
+        set_env("MASTER_ADDR", master_addr)
+        cmd = "cd ../zero-bubble-pipeline-parallelism && bash examples/pretrain_zero_bubble.sh"
+        
+    elif os.environ["ALGO"] == "zb2":
+        set_env("ENABLE_ZERO_BUBBLE", 1)
+        set_env("ZERO_BUBBLE_MEM_LIMIT", 2 * ngpu)
+        set_env("NODE_RANK", node_rank)
+        set_env("MASTER_ADDR", master_addr)
+        cmd = "cd ../zero-bubble-pipeline-parallelism && bash examples/pretrain_zero_bubble.sh"
+        
+    elif os.environ["ALGO"] == "1f1b":
+        os.environ["ENABLE_ZERO_BUBBLE"]=""
+        set_env("NODE_RANK", node_rank)
+        set_env("MASTER_ADDR", master_addr)
+        cmd = "cd ../zero-bubble-pipeline-parallelism && bash examples/pretrain_zero_bubble.sh"
+
+    # elif os.environ["ALGO"] == "1f1bi":
+    #     set_env("INTERLEAVED_1F1B", 1)
+    #     os.system(
+    #         "cd ../zero-bubble-pipeline-parallelism && bash examples/pretrain_zero_bubble.sh"
+    #     )
+    elif os.environ["ALGO"] == "ds":
+        set_env("CHECKPOINTING", 1)
+        cmd = f"torchrun --nproc-per-node={nproc_per_node} --master-addr={master_addr} --master-port={master_port} --nnodes={nnodes} --node-rank={node_rank} train-ds.py"
+    elif os.environ["ALGO"] == "wei":
+        set_env("CHECKPOINTING", 0)
+        cmd = f"torchrun --nproc-per-node={nproc_per_node} --master-addr={master_addr} --master-port={master_port} --nnodes={nnodes} --node-rank={node_rank} train-weipipe.py"
+    elif os.environ["ALGO"] == "taw":
+        set_env("CHECKPOINTING", 0)
+        cmd = f"torchrun --nproc-per-node={nproc_per_node} --master-addr={master_addr} --master-port={master_port} --nnodes={nnodes} --node-rank={node_rank} train-tawpipe.py"
+    elif os.environ["ALGO"] == "fsdp":
+        cmd = f"torchrun --nproc-per-node={nproc_per_node} --master-addr={master_addr} --master-port={master_port} --nnodes={nnodes} --node-rank={node_rank} train-fsdp.py"
+    else:
+        cmd = f"torchrun --nproc-per-node={nproc_per_node} --master-addr={master_addr} --master-port={master_port} --nnodes={nnodes} --node-rank={node_rank} train-ddp.py"
+    
+    try:
+        process = subprocess.Popen(cmd, shell=True)
+        process.communicate()
+    except KeyboardInterrupt:
+        import signal
+        os.killpg(os.getpid(process.pid), signal.SIGKILL)
+        exit()
+
+
+
+def run_scale():
+    nnodes = args.nnodes 
+    nproc_per_node=args.nproc_per_node
+    set_env("LAYERS", 32)
+
+    set_env("HIDDEN_SIZE", 1024)
+    set_env("ATTENTION_HEADS", 32)
+    
+    set_env("MICRO_BATCH_SIZE", 2)
+    set_env("ACC_STEP", 2)
+    
+    set_env("SEQ_LEN", 16384)
+    run_all(nproc_per_node, nnodes)
+
+
+def run_all(nproc_per_node, nnodes):
+    # algos = ["taw", "wei", "ds", "1f1b", "zb1", "zb2"]
+    algos = ["taw", "wei", "ds"]
+    for algo in algos:
+        run_single(algo, nproc_per_node=nproc_per_node, nnodes=nnodes)
+    show_all()
+    
+    
+def show_all():
+    def print_histogram(data):
+        data = dict(sorted (data.items(), key=lambda kv:(kv[1], kv[0])))
+        
+        max_v = max(data.values())
+        for k, v in data.items():
+            bar = '*' * int( v / max_v * 50)  # 假设最大宽度为20
+            print(f"{k}: {bar}")
+
+    dir = "/root/tawpipe/result"
+    
+    files = os.listdir(dir)
+    files = [ f for f in files if f.endswith("csv") if f != "all.csv"]
+
+    rs = []
+    header = None
+
+    for file in files:
+        with open(os.path.join(dir, file) , "r") as f:
+            reader = csv.reader(f, delimiter=',', quotechar='"' )
+            
+            if header is None:
+                header = next(reader)
+                
+            r = None
+            for row in reader:
+                r = row
+            rs.append (r + [os.path.splitext(file)[0]])
+
+    fname = os.path.join(dir, "all.csv")
+
+    exist = os.path.exists(fname)
+    with open(fname, "a") as f:
+
+        writer = csv.writer(f)
+        if not exist:
+            writer.writerow(header + ["algo"])
+            
+        writer.writerow(rs[0])
+        for r in rs[1:]:
+            writer.writerow (["" for x in r[:-3]] + r[-3:])    
+
+
+    def print_mem():
+        print("mem")
+        graph = dict()
+        for r in rs:
+            graph[r[-1].ljust(7, " ")] = float(r[-2])
+        print_histogram(graph)
+
+    def print_time():
+        print("time")
+        graph = dict()
+        for r in rs:
+            graph[r[-1].ljust(7, " ")] = float(r[-3])
+        print_histogram(graph)
+
+
+    print_mem()
+    # print()
+    print_time()
+
+if __name__ == "__main__":
+    set_env("LAYERS", 48) # args.ngpu
+    # set_env("LAYERS", 1)
+    
+    if args.algo == "all":
+        run_all(args.nproc_per_node, args.nnodes)
+    elif args.algo == "scale":
+        run_scale()
+    elif args.algo == "show":
+        show_all()
+    elif args.algo == "base":
+        run_base()
+    else:
+        run_single(args.algo, args.nproc_per_node, args.nnodes)
+    
