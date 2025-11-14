@@ -1,6 +1,6 @@
 # Topology-Aware Weight Pipeline Parallelism (TawPipe)
 
-This is the implementation of the AAAI 2026 paper [TawPipe: Topology-Aware Weight Pipeline Parallelism for Accelerating Long-Context Large Models Training](http://arxiv.org/abs/2511.xxxxx).
+This is the implementation of the AAAI 2026 paper [TawPipe: Topology-Aware Weight Pipeline Parallelism for Accelerating Long-Context Large Models Training](https://arxiv.org/abs/2511.09741).
 
 Tawipe is a communication-efficient framework that fully exploits device topology and hierarchical bandwidth in distributed clusters. TawPipe introduces a topology-aware weight scheduling mechanism to optimize intra-node and inter-node communication patterns, reducing transfer volume while maximizing bandwidth utilization.
 
