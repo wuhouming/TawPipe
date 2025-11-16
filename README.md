@@ -18,3 +18,13 @@ Quick settings to run TawPipe:
 - [WeiPipe](https://github.com/Gvilenius/weipipe)
 - [Zero-Bubble PP](https://github.com/sail-sg/zero-bubble-pipeline-parallelism)
 - [Megatron-LM](https://github.com/NVIDIA/Megatron-LM/tree/main)
+
+## Citation
+```
+@article{wu2025tawpipe,
+  title={TawPipe: Topology-Aware Weight Pipeline Parallelism for Accelerating Long-Context Large Models Training},
+  author={Wu, Houming and Chen, Ling},
+  journal={AAAI},
+  year={2025}
+}
+```
