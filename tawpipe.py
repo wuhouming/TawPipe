@@ -184,7 +184,7 @@ class TawPipe:
         self.pg = [torch.distributed.new_group(backend="nccl") for _ in range (4)]
         
         self.weight2rank=[]
-        # 权weight-device pair
+        # weight-device pair
         for i in range(self.world_size):
             rank=(i%self.shard_num)*self.shard_size+(i//self.shard_num)
             self.weight2rank.append(rank)

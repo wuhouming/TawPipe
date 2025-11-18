@@ -21,10 +21,10 @@ Quick settings to run TawPipe:
 
 ## Citation
 ```
-@article{wu2025tawpipe,
+@article{wu2026tawpipe,
   title={TawPipe: Topology-Aware Weight Pipeline Parallelism for Accelerating Long-Context Large Models Training},
   author={Wu, Houming and Chen, Ling},
   journal={AAAI},
-  year={2025}
+  year={2026}
 }
 ```
